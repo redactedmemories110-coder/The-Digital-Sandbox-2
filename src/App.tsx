@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { BrandProvider, useBrandTheme } from './components/common/BrandContext';
 import { MobileFrame } from './components/simulator/MobileFrame';
 import { GlobalObservabilityDrawer } from './components/simulator/GlobalObservabilityDrawer';
@@ -18,23 +18,30 @@ import { MoreSubMenuScreen } from './components/simulator/screens/MoreSubMenuScr
 import { BlueprintDocument } from './components/blueprint/BlueprintDocument';
 import { ComponentGallery } from './components/componentGallery/ComponentGallery';
 
+// Simulation Engine Core Imports
+import { SimulationEngine } from './simulation/engine';
+import { createInitialSimulationState } from './simulation/initialState';
 import {
-  INITIAL_CONSTRUCTS,
-  INITIAL_ROOMS,
-  INITIAL_KNOWLEDGE,
-  INITIAL_CONFLICTS,
-  INITIAL_EVENTS,
-} from './data/sandboxData';
+  applyQuarantine,
+  applyTerminate,
+  applyFork,
+  applyApproveKnowledge,
+  applyRejectKnowledge,
+  applyResolveConflict,
+} from './simulation/interventions';
+import {
+  SimulationState,
+  SimulationConstruct,
+  CycleExecutionSummary,
+} from './simulation/types';
 
 import {
-  Construct,
   Room,
   KnowledgeItem,
   ConflictRecord,
   WorldEvent,
   NavTab,
   MoreSubTab,
-  CycleSummary,
 } from './types';
 
 import {
@@ -75,13 +82,10 @@ function SandboxAppContent() {
   const [isSwitcherOpen, setIsSwitcherOpen] = useState(false);
   const [isCycleModalOpen, setIsCycleModalOpen] = useState(false);
 
-  // Living Simulation State
-  const [constructs, setConstructs] = useState<Construct[]>(INITIAL_CONSTRUCTS);
-  const [rooms, setRooms] = useState<Room[]>(INITIAL_ROOMS);
-  const [knowledge, setKnowledge] = useState<KnowledgeItem[]>(INITIAL_KNOWLEDGE);
-  const [conflicts, setConflicts] = useState<ConflictRecord[]>(INITIAL_CONFLICTS);
-  const [events, setEvents] = useState<WorldEvent[]>(INITIAL_EVENTS);
-  const [currentCycle, setCurrentCycle] = useState<number>(14);
+  // Persistent Living Simulation Engine Instance & State
+  const engineRef = useRef<SimulationEngine>(new SimulationEngine(createInitialSimulationState()));
+  const [simState, setSimState] = useState<SimulationState>(() => engineRef.current.getState());
+  const [activeCycleSummary, setActiveCycleSummary] = useState<CycleExecutionSummary | null>(null);
 
   // Navigation handlers
   const handleSelectTab = (tab: NavTab) => {
@@ -98,87 +102,76 @@ function SandboxAppContent() {
     setActiveConstructId(null);
   };
 
-  // Triggering cycle orchestration
+  // Triggering simulation cycle execution
   const handleTriggerCycle = () => {
+    const summary = engineRef.current.stepCycle();
+    setActiveCycleSummary(summary);
+    setSimState(engineRef.current.getState());
     setIsCycleModalOpen(true);
   };
 
-  const handleCompleteCycle = (summary: CycleSummary) => {
-    setCurrentCycle((prev) => prev + 1);
-
-    // Add new event to world feed
-    const newEvent: WorldEvent = {
-      id: `ev-${Date.now()}`,
-      type: 'discovery',
-      severity: 'notice',
-      title: `Cycle #${summary.cycleNumber} Settled`,
-      description: 'Orchestrated simulation cycle completed. 1 knowledge proposal queued, stability held at 91%.',
-      timestamp: 'Just now',
-      constructIds: ['c1', 'c2', 'c3'],
-      roomId: 'r2',
-      stabilityImpact: -3,
-    };
-    setEvents((prev) => [newEvent, ...prev]);
+  // Running multi-cycle batches from Scenario Lab
+  const handleRunScenarioCycles = (cyclesCount: number) => {
+    let lastSummary: CycleExecutionSummary | null = null;
+    for (let i = 0; i < cyclesCount; i++) {
+      lastSummary = engineRef.current.stepCycle();
+    }
+    if (lastSummary) {
+      setActiveCycleSummary(lastSummary);
+      setSimState(engineRef.current.getState());
+      setIsCycleModalOpen(true);
+    }
   };
 
-  // Proposal approval/rejection
+  // Proposal approval/rejection with consequences
   const handleApproveProposal = (id: string) => {
-    setKnowledge((prev) =>
-      prev.map((k) =>
-        k.id === id
-          ? {
-              ...k,
-              status: 'approved',
-              attribution: {
-                ...k.attribution,
-                action: 'approved_by',
-                by: 'Director (Operator)',
-                timestamp: 'Just now',
-              },
-            }
-          : k
-      )
-    );
+    const { updatedState } = applyApproveKnowledge(simState, id);
+    engineRef.current.setState(updatedState);
+    setSimState(updatedState);
   };
 
   const handleRejectProposal = (id: string) => {
-    setKnowledge((prev) =>
-      prev.map((k) => (k.id === id ? { ...k, status: 'rejected' } : k))
-    );
+    const { updatedState } = applyRejectKnowledge(simState, id);
+    engineRef.current.setState(updatedState);
+    setSimState(updatedState);
   };
 
   // Conflict resolution
   const handleResolveConflict = (conflictId: string, resolution: ConflictRecord['status']) => {
-    setConflicts((prev) =>
-      prev.map((c) => (c.id === conflictId ? { ...c, status: resolution } : c))
-    );
+    const { updatedState } = applyResolveConflict(simState, conflictId, resolution);
+    engineRef.current.setState(updatedState);
+    setSimState(updatedState);
   };
 
-  // Construct status changes
-  const handleUpdateConstructStatus = (id: string, newStatus: Construct['status']) => {
-    setConstructs((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, status: newStatus } : c))
-    );
+  // Construct status changes & interventions
+  const handleUpdateConstructStatus = (id: string, newStatus: SimulationConstruct['status']) => {
+    if (newStatus === 'quarantined') {
+      const { updatedState } = applyQuarantine(simState, id);
+      engineRef.current.setState(updatedState);
+      setSimState(updatedState);
+    } else {
+      // Direct status update (e.g. paused / active)
+      const nextConstructs = simState.constructs.map((c) => (c.id === id ? { ...c, status: newStatus } : c));
+      const nextState: SimulationState = { ...simState, constructs: nextConstructs };
+      engineRef.current.setState(nextState);
+      setSimState(nextState);
+    }
   };
 
   const handleForkConstruct = (id: string) => {
-    const original = constructs.find((c) => c.id === id);
-    if (!original) return;
-    const forked: Construct = {
-      ...original,
-      id: `c-fork-${Date.now()}`,
-      name: `${original.name} (Fork α)`,
-      codename: `${original.codename}-V2`,
-      stability: 90,
-      activeRooms: ['r2'],
-      lastActive: 'Just now',
-    };
-    setConstructs((prev) => [...prev, forked]);
-    setActiveConstructId(forked.id);
+    const { updatedState, newConstruct } = applyFork(simState, id);
+    engineRef.current.setState(updatedState);
+    setSimState(updatedState);
+    if (newConstruct) {
+      setActiveConstructId(newConstruct.id);
+    }
   };
 
   const handleTerminateConstruct = (id: string) => {
-    setConstructs((prev) => prev.filter((c) => c.id !== id));
+    const { updatedState } = applyTerminate(simState, id);
+    engineRef.current.setState(updatedState);
+    setSimState(updatedState);
+    setActiveConstructId(null);
   };
 
   // Send message in room
@@ -191,19 +184,18 @@ function SandboxAppContent() {
       timestamp: 'Just now',
       text,
     };
-    setRooms((prev) =>
-      prev.map((r) =>
-        r.id === activeRoomId
-          ? { ...r, messages: [...r.messages, newMsg], lastActivity: 'Just now' }
-          : r
-      )
+    const nextRooms = simState.rooms.map((r) =>
+      r.id === activeRoomId ? { ...r, messages: [...r.messages, newMsg], lastActivity: 'Just now' } : r
     );
+    const nextState: SimulationState = { ...simState, rooms: nextRooms };
+    engineRef.current.setState(nextState);
+    setSimState(nextState);
   };
 
-  const pendingProposalsCount = knowledge.filter((k) => k.status === 'pending').length;
-  const unresolvedConflictsCount = conflicts.filter((c) => c.status === 'unresolved').length;
-  const currentRoom = rooms.find((r) => r.id === activeRoomId);
-  const currentConstruct = constructs.find((c) => c.id === activeConstructId);
+  const pendingProposalsCount = simState.knowledge.filter((k) => k.status === 'pending').length;
+  const unresolvedConflictsCount = simState.conflicts.filter((c) => c.status === 'unresolved').length;
+  const currentRoom = simState.rooms.find((r) => r.id === activeRoomId);
+  const currentConstruct = simState.constructs.find((c) => c.id === activeConstructId);
 
   // Render Simulator Screen Viewport
   const renderScreenContent = () => {
@@ -230,6 +222,7 @@ function SandboxAppContent() {
       return (
         <ConstructDetailScreen
           construct={currentConstruct}
+          allConstructs={simState.constructs}
           onBack={() => setActiveConstructId(null)}
           onUpdateStatus={handleUpdateConstructStatus}
           onForkConstruct={handleForkConstruct}
@@ -242,7 +235,7 @@ function SandboxAppContent() {
       return (
         <RoomDetailScreen
           room={currentRoom}
-          constructs={constructs}
+          constructs={simState.constructs}
           onBack={() => setActiveRoomId(null)}
           onOpenConstruct={(id) => setActiveConstructId(id)}
           onOpenVault={() => handleNavigateMore('vault')}
@@ -256,10 +249,10 @@ function SandboxAppContent() {
       case 'console':
         return (
           <ConsoleKaneScreen
-            constructs={constructs}
-            proposals={knowledge}
-            conflicts={conflicts}
-            currentCycle={currentCycle}
+            constructs={simState.constructs}
+            proposals={simState.knowledge}
+            conflicts={simState.conflicts}
+            currentCycle={simState.currentCycle}
             onTriggerCycle={handleTriggerCycle}
             onOpenVault={() => handleNavigateMore('vault')}
             onOpenConflict={() => handleNavigateMore('vault')}
@@ -272,14 +265,14 @@ function SandboxAppContent() {
       case 'rooms':
         return (
           <RoomsListScreen
-            rooms={rooms}
-            constructs={constructs}
+            rooms={simState.rooms}
+            constructs={simState.constructs}
             onSelectRoom={(id) => setActiveRoomId(id)}
             onCreateRoom={() => {
               const newR: Room = {
                 id: `r-${Date.now()}`,
                 name: 'New Dialectic Space',
-                purpose: 'Emergent construct debate',
+                purpose: 'Emergent construct dialectic debate',
                 participantIds: ['c1', 'c2'],
                 status: 'active',
                 unreadCount: 0,
@@ -287,7 +280,9 @@ function SandboxAppContent() {
                 messages: [],
                 roomMemory: [],
               };
-              setRooms((prev) => [newR, ...prev]);
+              const nextState: SimulationState = { ...simState, rooms: [...simState.rooms, newR] };
+              engineRef.current.setState(nextState);
+              setSimState(nextState);
               setActiveRoomId(newR.id);
             }}
           />
@@ -295,8 +290,8 @@ function SandboxAppContent() {
       case 'world':
         return (
           <WorldFeedScreen
-            events={events}
-            constructs={constructs}
+            events={simState.events}
+            constructs={simState.constructs}
             onSelectEvent={(ev) => {
               if (ev.roomId) {
                 setActiveTab('rooms');
@@ -308,18 +303,18 @@ function SandboxAppContent() {
       case 'lab':
         return (
           <ScenarioLabScreen
-            constructs={constructs}
-            onRunScenarioCycle={handleTriggerCycle}
+            constructs={simState.constructs}
+            onRunScenarioCycle={handleRunScenarioCycles}
           />
         );
       case 'more':
         if (moreSubTab === 'roster') {
           return (
             <RosterScreen
-              constructs={constructs}
+              constructs={simState.constructs}
               onSelectConstruct={(id) => setActiveConstructId(id)}
               onSpawnConstruct={() => {
-                const newC: Construct = {
+                const newC: SimulationConstruct = {
                   id: `c-${Date.now()}`,
                   name: 'Nexus-Prime',
                   codename: 'NEXUS',
@@ -339,7 +334,12 @@ function SandboxAppContent() {
                   },
                   memory: {
                     personal: [
-                      { id: 'm-new-1', content: 'Construct initialization complete.', confidence: 'high', timestamp: 'Just now' }
+                      {
+                        id: 'm-new-1',
+                        content: 'Construct initialization complete.',
+                        confidence: 'high',
+                        timestamp: 'Just now',
+                      },
                     ],
                     roomRef: [],
                     vaultContrib: [],
@@ -353,8 +353,27 @@ function SandboxAppContent() {
                   },
                   activeRooms: ['r2'],
                   lastActive: 'Just now',
+                  strategic: {
+                    suspicion: 10,
+                    patternRecognition: 85,
+                    adaptation: 40,
+                    deception: 5,
+                    containmentPressure: 10,
+                    knowledgeRisk: 30,
+                    communicationStrategy: 'inquisitive',
+                    observedInterventions: [],
+                  },
+                  relationships: {
+                    c1: { targetConstructId: 'c1', trust: 60, suspicion: 15, influence: 50, lastInteractionCycle: 14, sharedSecretsCount: 0 },
+                    c2: { targetConstructId: 'c2', trust: 65, suspicion: 20, influence: 55, lastInteractionCycle: 14, sharedSecretsCount: 0 },
+                  },
                 };
-                setConstructs((prev) => [...prev, newC]);
+                const nextState: SimulationState = {
+                  ...simState,
+                  constructs: [...simState.constructs, newC],
+                };
+                engineRef.current.setState(nextState);
+                setSimState(nextState);
                 setActiveConstructId(newC.id);
               }}
             />
@@ -363,9 +382,9 @@ function SandboxAppContent() {
         if (moreSubTab === 'vault') {
           return (
             <KnowledgeVaultScreen
-              knowledge={knowledge}
-              conflicts={conflicts}
-              constructs={constructs}
+              knowledge={simState.knowledge}
+              conflicts={simState.conflicts}
+              constructs={simState.constructs}
               onApproveProposal={handleApproveProposal}
               onRejectProposal={handleRejectProposal}
               onResolveConflict={handleResolveConflict}
@@ -501,7 +520,7 @@ function SandboxAppContent() {
                 <div className="p-4 rounded-xl bg-[#13131A]/80 backdrop-blur-md border border-[#1F1F2B] space-y-2">
                   <h3 className="font-bold text-sm text-[#E0E0E6] font-display-title">
                     {activeConstructId
-                      ? 'Screen G: Construct Persona Detail'
+                      ? 'Screen G: Construct Persona & Strategy'
                       : activeRoomId
                       ? 'Screen E: Room Detail & Director View'
                       : isSessionPicker
@@ -520,11 +539,11 @@ function SandboxAppContent() {
                   </h3>
                   <p className="text-[11px] text-[#B0B0C0] leading-relaxed">
                     {activeConstructId
-                      ? 'Structured persona management, goals, boundaries, and 3-tier memory scopes without raw prompt exposure.'
+                      ? 'Inspect construct cognitive state, suspicion levels, peer trust matrices, and adaptive memories of player interventions.'
                       : activeRoomId
-                      ? 'Multi-construct conversation supporting 2–8 entities with optional Director View annotations and inline knowledge chips.'
+                      ? 'Multi-construct conversation supporting 2–8 entities with director view annotations, knowledge chips, and whisper channels.'
                       : activeTab === 'console'
-                      ? 'Kane conversational orchestration interface with structured directives and sovereign Operator governance.'
+                      ? 'Kane conversational orchestration interface with structured directives, conflict alerts, and sovereign Operator governance.'
                       : activeTab === 'lab'
                       ? 'Controlled scenario experiments, batch cycle triggers (1/3/10 cycles), and equilibrium stability graphs.'
                       : 'High-observability mobile interface allowing instant inspection of synthetic construct state and memory.'}
@@ -656,11 +675,12 @@ function SandboxAppContent() {
                 <GlobalObservabilityDrawer
                   isOpen={isObservabilityOpen}
                   onClose={() => setIsObservabilityOpen(false)}
-                  constructs={constructs}
-                  proposals={knowledge}
-                  conflicts={conflicts}
-                  events={events}
-                  currentCycle={currentCycle}
+                  constructs={simState.constructs}
+                  proposals={simState.knowledge}
+                  conflicts={simState.conflicts}
+                  events={simState.events}
+                  dangerousConnections={simState.dangerousConnections}
+                  currentCycle={simState.currentCycle}
                   onOpenConstruct={(id) => {
                     setActiveConstructId(id);
                   }}
@@ -672,10 +692,10 @@ function SandboxAppContent() {
                 <QuickSwitcherModal
                   isOpen={isSwitcherOpen}
                   onClose={() => setIsSwitcherOpen(false)}
-                  constructs={constructs}
-                  rooms={rooms}
-                  knowledge={knowledge}
-                  events={events}
+                  constructs={simState.constructs}
+                  rooms={simState.rooms}
+                  knowledge={simState.knowledge}
+                  events={simState.events}
                   onNavigateTab={(tab, subTab) => {
                     setActiveTab(tab);
                     if (subTab) setMoreSubTab(subTab);
@@ -694,12 +714,12 @@ function SandboxAppContent() {
                   }}
                 />
 
-                {/* Signature WOW Moment: Cycle Orchestration Modal */}
+                {/* Signature Moment: Cycle Orchestration Modal */}
                 <CycleOrchestrationModal
                   isOpen={isCycleModalOpen}
                   onClose={() => setIsCycleModalOpen(false)}
-                  constructs={constructs}
-                  onCompleteCycle={handleCompleteCycle}
+                  constructs={simState.constructs}
+                  summary={activeCycleSummary}
                   onOpenVault={() => handleNavigateMore('vault')}
                   onOpenConflict={() => handleNavigateMore('vault')}
                 />

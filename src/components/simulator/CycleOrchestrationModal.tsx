@@ -1,14 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useBrandTheme } from '../common/BrandContext';
 import { THEME_SPECS } from '../../utils/themeTokens';
-import { Construct, KnowledgeItem, ConflictRecord, CycleTraceStep, CycleSummary } from '../../types';
-import { Play, CheckCircle, AlertTriangle, Sparkles, Cpu, ShieldAlert, ArrowRight, Eye, RefreshCw, X } from 'lucide-react';
+import { SimulationConstruct, CycleExecutionSummary, CycleTraceActionStep } from '../../simulation/types';
+import {
+  Play,
+  CheckCircle,
+  AlertTriangle,
+  Sparkles,
+  Cpu,
+  ShieldAlert,
+  ArrowRight,
+  Eye,
+  RefreshCw,
+  X,
+  Activity,
+  Zap,
+} from 'lucide-react';
 
 interface CycleOrchestrationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  constructs: Construct[];
-  onCompleteCycle: (summary: CycleSummary) => void;
+  constructs: SimulationConstruct[];
+  summary: CycleExecutionSummary | null;
   onOpenVault: () => void;
   onOpenConflict: () => void;
 }
@@ -17,7 +30,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
   isOpen,
   onClose,
   constructs,
-  onCompleteCycle,
+  summary,
   onOpenVault,
   onOpenConflict,
 }) => {
@@ -27,57 +40,10 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
   const [phase, setPhase] = useState<'simulating' | 'settled'>('simulating');
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [cycleTrace, setCycleTrace] = useState<CycleTraceStep[]>([]);
+  const [cycleTrace, setCycleTrace] = useState<CycleTraceActionStep[]>([]);
   const [activePacket, setActivePacket] = useState<{ from: string; to: string; label: string } | null>(null);
 
-  // Simulation timeline steps
-  const simulationSteps: CycleTraceStep[] = [
-    {
-      stepIndex: 0,
-      sourceConstructId: 'c1',
-      targetConstructId: 'c2',
-      type: 'message',
-      narrative: 'Axiom-7 queries Vesper-Nyx on ontological grounding parameters.',
-      packetLabel: 'Ontology Query',
-      timestamp: 'T+0.4s'
-    },
-    {
-      stepIndex: 1,
-      sourceConstructId: 'c2',
-      targetConstructId: 'c3',
-      type: 'memory_read',
-      narrative: 'Vesper-Nyx references Room Memory in Agora and formulates counter-premise.',
-      packetLabel: 'Room Memory Read',
-      timestamp: 'T+1.1s'
-    },
-    {
-      stepIndex: 2,
-      sourceConstructId: 'c2',
-      targetConstructId: 'c1',
-      type: 'knowledge_emit',
-      narrative: 'Vesper-Nyx proposes "Dynamic Flux Principle" to bypass private staging.',
-      packetLabel: 'New Proposal ➔ Gate',
-      timestamp: 'T+1.8s'
-    },
-    {
-      stepIndex: 3,
-      sourceConstructId: 'c1',
-      targetConstructId: 'c2',
-      type: 'conflict_flag',
-      narrative: 'Kane detects high epistemic divergence: Axiom-7 formal objection registered.',
-      packetLabel: 'Conflict Tension Detected',
-      timestamp: 'T+2.5s'
-    },
-    {
-      stepIndex: 4,
-      sourceConstructId: 'c3',
-      targetConstructId: 'kane',
-      type: 'approval_queue',
-      narrative: 'Solon-Kael drafts harmonic mediation bridge; proposal routed to Approval Gate.',
-      packetLabel: 'Gate Routing Complete',
-      timestamp: 'T+3.2s'
-    }
-  ];
+  const stepsToPlay = summary?.traceSteps && summary.traceSteps.length > 0 ? summary.traceSteps : [];
 
   useEffect(() => {
     if (!isOpen) {
@@ -88,47 +54,42 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
       return;
     }
 
-    // Step-by-step playback
+    if (stepsToPlay.length === 0) {
+      setPhase('settled');
+      return;
+    }
+
+    setPhase('simulating');
+    setCurrentStepIndex(0);
+    setCycleTrace([]);
+
     let step = 0;
     const interval = setInterval(() => {
-      if (step < simulationSteps.length) {
-        const nextStep = simulationSteps[step];
+      if (step < stepsToPlay.length) {
+        const nextStep = stepsToPlay[step];
         setCurrentStepIndex(step);
         setCycleTrace((prev) => [...prev, nextStep]);
         if (nextStep.sourceConstructId && nextStep.targetConstructId) {
           setActivePacket({
             from: nextStep.sourceConstructId,
             to: nextStep.targetConstructId,
-            label: nextStep.packetLabel || 'Data'
+            label: nextStep.packetLabel || 'Data Stream',
           });
+        } else {
+          setActivePacket(null);
         }
         step++;
       } else {
         clearInterval(interval);
         setTimeout(() => {
           setPhase('settled');
-          onCompleteCycle({
-            cycleNumber: 15,
-            timestamp: 'Just now',
-            durationMs: 3400,
-            stabilityBefore: 94,
-            stabilityAfter: 91,
-            eventsGenerated: 4,
-            proposalsEmitted: 1,
-            conflictsDetected: 1,
-            highlights: [
-              'Vesper-Nyx proposed "Dynamic Flux Principle" to the sandbox vault',
-              'Epistemic conflict flagged between Axiom-7 and Vesper-Nyx',
-              'Solon-Kael synthesized an arbitration bridge',
-              'Overall sandbox stability settled at 91% (Nominal)'
-            ]
-          });
-        }, 800);
+          setActivePacket(null);
+        }, 600);
       }
-    }, 700);
+    }, 650);
 
     return () => clearInterval(interval);
-  }, [isOpen]);
+  }, [isOpen, summary]);
 
   if (!isOpen) return null;
 
@@ -138,8 +99,13 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
     c2: { x: 78, y: 30 }, // Vesper-Nyx (Top Right)
     c3: { x: 50, y: 75 }, // Solon-Kael (Bottom Center)
     c4: { x: 18, y: 65 }, // Mira-Tide (Mid Left)
-    kane: { x: 50, y: 45 } // Kane Orchestrator Center
+    kane: { x: 50, y: 45 }, // Kane Orchestrator Center
   };
+
+  const cycleNum = summary ? summary.cycleNumber : 15;
+  const stabilityBefore = summary ? summary.stabilityBefore : 94;
+  const stabilityAfter = summary ? summary.stabilityAfter : 91;
+  const stabDelta = stabilityAfter - stabilityBefore;
 
   return (
     <div className="absolute inset-0 z-50 flex flex-col bg-[#050507]/90 backdrop-blur-2xl text-[#E0E0E6] animate-in fade-in duration-200">
@@ -153,7 +119,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
               Cycle Orchestration Active
             </div>
             <p className="text-[10px] text-[#636370]">
-              {phase === 'simulating' ? 'Running simulation cycle #15...' : 'Cycle #15 Complete • Settled'}
+              {phase === 'simulating' ? `Running simulation cycle #${cycleNum}...` : `Cycle #${cycleNum} Settled • Ready`}
             </p>
           </div>
         </div>
@@ -168,7 +134,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
       {/* Main Orchestration Canvas */}
       <div className="relative flex-1 w-full bg-radial from-[#13131A]/70 via-[#09090E] to-[#050507] overflow-hidden flex flex-col">
         {/* Visual Graph Area */}
-        <div className="relative h-64 w-full flex items-center justify-center">
+        <div className="relative h-60 w-full flex items-center justify-center">
           {/* Subtle Grid / Polar rings */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
             <div className="w-48 h-48 rounded-full border border-dashed border-[#00F5FF]" />
@@ -184,27 +150,13 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
             <line x1="22%" y1="30%" x2="50%" y2="45%" stroke="#00F5FF" strokeWidth="1" strokeOpacity="0.3" />
             <line x1="78%" y1="30%" x2="50%" y2="45%" stroke="#7000FF" strokeWidth="1" strokeOpacity="0.3" />
 
-            {/* Conflict tension highlight between Axiom (c1) and Vesper (c2) */}
-            {currentStepIndex >= 3 && (
-              <line
-                x1="22%"
-                y1="30%"
-                x2="78%"
-                y2="30%"
-                stroke="#FF3D00"
-                strokeWidth="2.5"
-                strokeDasharray="4 2"
-                className="animate-pulse"
-              />
-            )}
-
             {/* Dynamic Moving Packet Indicator */}
             {activePacket && nodePositions[activePacket.from] && nodePositions[activePacket.to] && (
               <g className="transition-all duration-500">
                 <circle
                   cx={`${(nodePositions[activePacket.from].x + nodePositions[activePacket.to].x) / 2}%`}
                   cy={`${(nodePositions[activePacket.from].y + nodePositions[activePacket.to].y) / 2}%`}
-                  r="5"
+                  r="6"
                   fill="#00F5FF"
                   className="animate-ping"
                 />
@@ -232,6 +184,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
             const pos = nodePositions[c.id];
             if (!pos) return null;
             const isSelected = selectedNode === c.id;
+            const isQuarantined = c.status === 'quarantined';
             return (
               <div
                 key={c.id}
@@ -240,14 +193,24 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
                 style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: 'translate(-50%, -50%)' }}
               >
                 <div
-                  className={`w-10 h-10 rounded-xl ${c.avatarBg} border ${isSelected ? 'ring-2 ring-[#00F5FF]' : 'border-[#1F1F2B]'} flex items-center justify-center shadow-lg transition-all`}
+                  className={`w-10 h-10 rounded-xl ${isQuarantined ? 'bg-red-950/80 border-red-500' : c.avatarBg} border ${
+                    isSelected ? 'ring-2 ring-[#00F5FF]' : 'border-[#1F1F2B]'
+                  } flex items-center justify-center shadow-lg transition-all`}
                 >
-                  <span className={`text-sm font-bold ${c.avatarColor}`}>{c.avatarSymbol}</span>
+                  <span className={`text-sm font-bold ${isQuarantined ? 'text-red-400' : c.avatarColor}`}>
+                    {c.avatarSymbol}
+                  </span>
                 </div>
                 <span className="text-[10px] font-semibold text-[#E0E0E6] mt-1">{c.name}</span>
                 <div className="flex items-center gap-1">
                   <span className="text-[8px] text-[#636370]">{c.role.split(' ')[0]}</span>
-                  <span className="text-[8px] font-mono-code text-[#00FF66]">{c.stability}%</span>
+                  <span
+                    className={`text-[8px] font-mono-code ${
+                      c.stability > 80 ? 'text-[#00FF66]' : c.stability > 60 ? 'text-[#FFB800]' : 'text-[#FF3D00]'
+                    }`}
+                  >
+                    {c.stability}%
+                  </span>
                 </div>
               </div>
             );
@@ -255,7 +218,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
 
           {/* Tappable Packet Badge in Center */}
           {activePacket && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full bg-[#13131A]/90 border border-[#00F5FF]/50 text-[10px] font-mono-code text-[#00F5FF] shadow-[0_0_12px_rgba(0,245,255,0.25)] flex items-center gap-1.5 animate-bounce backdrop-blur-md">
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 px-2.5 py-1 rounded-full bg-[#13131A]/90 border border-[#00F5FF]/50 text-[10px] font-mono-code text-[#00F5FF] shadow-[0_0_12px_rgba(0,245,255,0.25)] flex items-center gap-1.5 animate-bounce backdrop-blur-md">
               <Sparkles className="w-3 h-3 text-[#00F5FF]" />
               <span>{activePacket.label}</span>
             </div>
@@ -269,9 +232,11 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
               <div className="flex items-center justify-between">
                 <span className="text-[10px] uppercase tracking-wider text-[#636370] font-semibold flex items-center gap-1.5">
                   <RefreshCw className="w-3 h-3 text-[#00F5FF] animate-spin" />
-                  Live Cycle Trace
+                  Live Simulation Trace
                 </span>
-                <span className="text-[9px] font-mono-code text-[#00F5FF]">Step {currentStepIndex + 1}/5</span>
+                <span className="text-[9px] font-mono-code text-[#00F5FF]">
+                  Step {currentStepIndex + 1}/{stepsToPlay.length || 1}
+                </span>
               </div>
 
               <div className="space-y-1.5 max-h-36 overflow-y-auto">
@@ -284,7 +249,15 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
                     <div className="flex-1">
                       <p className="text-[#E0E0E6] leading-tight">{step.narrative}</p>
                       {step.packetLabel && (
-                        <span className="inline-block mt-1 text-[9px] px-1.5 py-0.5 rounded bg-[#00F5FF]/10 text-[#00F5FF] border border-[#00F5FF]/30 font-mono-code">
+                        <span
+                          className={`inline-block mt-1 text-[8px] px-1.5 py-0.5 rounded font-mono-code ${
+                            step.type === 'conflict_flag'
+                              ? 'bg-red-950/60 text-red-400 border border-red-500/40'
+                              : step.type === 'whisper'
+                              ? 'bg-purple-950/60 text-purple-400 border border-purple-500/40'
+                              : 'bg-[#00F5FF]/10 text-[#00F5FF] border border-[#00F5FF]/30'
+                          }`}
+                        >
                           {step.packetLabel}
                         </span>
                       )}
@@ -299,24 +272,34 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-[#00FF66] text-xs font-bold uppercase tracking-wider">
                   <CheckCircle className="w-4 h-4 text-[#00FF66]" />
-                  Cycle #15 Settle Summary
+                  Cycle #{cycleNum} Settle Summary
                 </div>
-                <span className="text-[10px] font-mono-code text-[#636370]">3.4s Execution</span>
+                <span className="text-[10px] font-mono-code text-[#636370]">3.2s Autonomous Execution</span>
               </div>
 
-              {/* What Changed Key Metrics */}
+              {/* Key Metrics */}
               <div className="grid grid-cols-3 gap-2">
                 <div className="p-2 rounded-xl bg-[#13131A]/85 backdrop-blur-md border border-[#1F1F2B] text-center">
                   <span className="text-[9px] text-[#636370] uppercase">Stability</span>
-                  <div className="text-sm font-bold font-mono-code text-[#00FF66]">91% (-3%)</div>
+                  <div
+                    className={`text-sm font-bold font-mono-code ${
+                      stabilityAfter > 85 ? 'text-[#00FF66]' : stabilityAfter > 70 ? 'text-[#FFB800]' : 'text-[#FF3D00]'
+                    }`}
+                  >
+                    {stabilityAfter}% ({stabDelta >= 0 ? `+${stabDelta}` : stabDelta}%)
+                  </div>
                 </div>
                 <div className="p-2 rounded-xl bg-[#13131A]/85 backdrop-blur-md border border-[#7000FF]/40 text-center">
-                  <span className="text-[9px] text-[#636370] uppercase">New Proposals</span>
-                  <div className="text-sm font-bold font-mono-code text-[#7000FF]">+1 In Gate</div>
+                  <span className="text-[9px] text-[#636370] uppercase">Gate Proposals</span>
+                  <div className="text-sm font-bold font-mono-code text-[#7000FF]">
+                    {summary?.proposalsEmitted || 0} Pending
+                  </div>
                 </div>
                 <div className="p-2 rounded-xl bg-[#13131A]/85 backdrop-blur-md border border-[#3B1111] text-center">
                   <span className="text-[9px] text-[#636370] uppercase">Conflicts</span>
-                  <div className="text-sm font-bold font-mono-code text-[#FF3D00]">1 Flagged</div>
+                  <div className="text-sm font-bold font-mono-code text-[#FF3D00]">
+                    {summary?.conflictsDetected || 0} Active
+                  </div>
                 </div>
               </div>
 
@@ -325,14 +308,16 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
                 <div className="font-semibold text-[#E0E0E6] mb-1 text-[10px] uppercase text-[#00F5FF]">
                   Key Sandbox Mutations:
                 </div>
-                <div className="flex items-start gap-1.5">
-                  <span className="text-[#7000FF]">➔</span>
-                  <span>Vesper-Nyx submitted <strong>"Dynamic Flux Principle"</strong> to Vault Approval Gate.</span>
-                </div>
-                <div className="flex items-start gap-1.5">
-                  <span className="text-[#FF3D00]">⚠</span>
-                  <span>Axiom-7 registered formal objection regarding Staging Latency bounds.</span>
-                </div>
+                {summary?.highlights && summary.highlights.length > 0 ? (
+                  summary.highlights.map((h, i) => (
+                    <div key={i} className="flex items-start gap-1.5">
+                      <span className="text-[#00F5FF]">➔</span>
+                      <span>{h}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-[10px] text-[#636370]">Construct dialectics settled within nominal variance.</p>
+                )}
               </div>
 
               {/* Actions */}
@@ -345,7 +330,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
                   className="py-2 px-3 rounded-xl bg-[#7000FF]/20 hover:bg-[#7000FF]/30 border border-[#7000FF]/50 text-[#7000FF] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-[0_0_10px_rgba(112,0,255,0.2)]"
                 >
                   <Sparkles className="w-3.5 h-3.5" />
-                  Review Gate (1)
+                  Review Vault
                 </button>
 
                 <button
@@ -356,7 +341,7 @@ export const CycleOrchestrationModal: React.FC<CycleOrchestrationModalProps> = (
                   className="py-2 px-3 rounded-xl bg-[#1A1111] hover:bg-[#2A1515] border border-[#3B1111] text-[#FF3D00] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-[0_0_10px_rgba(255,61,0,0.2)]"
                 >
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  Inspect Conflict
+                  Arbitrate Disputes
                 </button>
               </div>
 
